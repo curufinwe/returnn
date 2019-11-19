@@ -2770,7 +2770,7 @@ class LinearLayer(_ConcatInputLayer):
   layer_class = "linear"
 
   def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
-               bias_init=0.0, use_transposed_weights=False, **kwargs):
+               bias_init=0.0, use_transposed_weights=False, quantization_options=None, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
@@ -2806,6 +2806,16 @@ class LinearLayer(_ConcatInputLayer):
 
       weights = self.add_param(tf.get_variable(
         name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+
+      if quantization_options is not None and self.network.train_flag:
+        weights = tf.quantization.quantize_and_dequantize(weights,
+                                                          input_min=quantization_options.get('input_min', None),
+                                                          input_max=quantization_options.get('input_max', None),
+                                                          signed_input=quantization_options.get('signed_input', True),
+                                                          num_bits=quantization_options.get('num_bits', 8),
+                                                          range_given=quantization_options.get('range_given', False),
+                                                          round_mode=quantization_options.get('round_mode', 'HALF_TO_EVEN'),
+                                                          name='quantize_and_dequantize')
       weights_ = weights
 
       if self.use_transposed_weights:
