@@ -460,7 +460,7 @@ class OpMaker(object):
       path = os.path.dirname(self.blas_lib)
       if path == "":
         path = "."
-      ld_flags += ["-L%s" % path, "-l:%s" % os.path.basename(self.blas_lib)]
+      ld_flags += ["-L%s" % path, "-l:%s" % os.path.basename(self.blas_lib), "-Xlinker=--no-as-needed", "-Xlinker=-rpath=%s" % path]
       have_blas_lib = True
     if not have_blas_lib and self.search_for_runtime_blas:
       import Util
