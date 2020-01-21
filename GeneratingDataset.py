@@ -53,7 +53,7 @@ class GeneratingDataset(Dataset):
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
     assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
-    self.random.seed(self.fixed_random_seed or epoch or 1)
+    self.random.seed(self.fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_timesteps = 0
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
@@ -920,7 +920,7 @@ class ExtractAudioFeatures:
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
-               post_process=None,
+               pre_process=None, post_process=None,
                sample_rate=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
@@ -930,12 +930,13 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
+    :param str|function features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param dict[str]|None feature_options: provide additional parameters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
-    :param function post_process:
+    :param function|None pre_process:
+    :param function|None post_process:
     :param int|None sample_rate:
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
@@ -974,6 +975,7 @@ class ExtractAudioFeatures:
     self.random_state = random_state
     self.features = features
     self.feature_options = feature_options
+    self.pre_process = pre_process
     self.post_process = post_process
     self.sample_rate = sample_rate
     self.raw_ogg_opts = raw_ogg_opts
@@ -1050,6 +1052,10 @@ class ExtractAudioFeatures:
         opts=self.random_permute_opts,
         random_state=self.random_state)
 
+    if self.pre_process:
+      audio = self.pre_process(audio=audio, sample_rate=sample_rate, random_state=self.random_state)
+      assert isinstance(audio, numpy.ndarray) and len(audio.shape) == 1
+
     if self.features == "raw":
       assert self.num_feature_filters == 1
       feature_data = audio[:, None].astype("float32")  # add dummy dimension
@@ -1066,7 +1072,9 @@ class ExtractAudioFeatures:
         assert isinstance(self.feature_options, dict)
         kwargs.update(self.feature_options)
 
-      if self.features == "mfcc":
+      if callable(self.features):
+        feature_data = self.features(random_state=self.random_state, **kwargs)
+      elif self.features == "mfcc":
         feature_data = _get_audio_features_mfcc(**kwargs)
       elif self.features == "log_mel_filterbank":
         feature_data = _get_audio_log_mel_filterbank(**kwargs)
@@ -2380,7 +2388,7 @@ class LibriSpeechCorpus(CachedDataset2):
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2727,7 +2735,7 @@ class OggZipDataset(CachedDataset2):
     super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2923,7 +2931,7 @@ class Enwik8Corpus(CachedDataset2):
     if self.partition_epoch:
       epoch_part = (epoch - 1) % self.partition_epoch
       epoch = ((epoch - 1) // self.partition_epoch) + 1
-    self._random.seed(self._fixed_random_seed or epoch or 1)
+    self._random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_seqs = len(self._seq_starts)
     self._num_timesteps = len(self._data) - 1
     if self._batch_num_seqs is None:

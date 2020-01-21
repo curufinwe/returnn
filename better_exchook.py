@@ -357,7 +357,7 @@ def fallback_findfile(filename):
     :return: try to find the full filename, e.g. in modules, etc
     :rtype: str|None
     """
-    mods = [m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__]
+    mods = [m for m in sys.modules.values() if m and getattr(m, "__file__", None) and filename in m.__file__]
     if len(mods) == 0:
         return None
     alt_fn = mods[0].__file__
@@ -433,7 +433,7 @@ def str_visible_len(s):
     """
     import re
     # via: https://github.com/chalk/ansi-regex/blob/master/index.js
-    s = re.sub("[\x1b\x9b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
+    s = re.sub("[\x1b\x9b][\\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
     return len(s)
 
 

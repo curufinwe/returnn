@@ -13,7 +13,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 from pprint import pprint
 import unittest
@@ -337,6 +337,11 @@ def test_Data_copy_squeeze_axes_feature_axis():
   print("orig:", weights, "squeezed:", squeezed)
   assert squeezed.shape == (None,) and squeezed.time_dim_axis == 1
   assert weights.size_placeholder[0] is squeezed.size_placeholder[0]
+
+
+def test_Data_copy_time_flattened():
+  x = Data(name='x', shape=(None, 1031), batch_dim_axis=1, auto_create_placeholders=True)
+  y = x.copy_time_flattened()
 
 
 def test_ExternData_via_config():
@@ -977,6 +982,20 @@ def test_Data_copy_move_axis_time_to_end():
   d1 = Data(name="att_weights", shape=(None, None, 4))
   d2 = d1.copy_move_axis(d1.time_dim_axis, -1)
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
+
+
+def test_sequence_mask_len_via_loop():
+  seq_len = tf.while_loop(
+    cond=lambda x: tf.less(x[0], 2),
+    body=lambda x: x + 1,
+    loop_vars=[tf.convert_to_tensor([1, 2])])
+  assert not has_control_flow_context(seq_len)
+  mask = sequence_mask_time_major(seq_len)
+  seq_len_v, mask_v = session.run((seq_len, mask))
+  print(seq_len_v)
+  assert_equal(seq_len_v.tolist(), [2, 3])
+  print(mask_v)
+  assert_equal(mask_v.tolist(), [[True, True], [True, True], [False, True]])
 
 
 def test_get_initializer_zero():
@@ -2446,7 +2465,7 @@ def test_openfst():
   TFOpenFst.get_tf_mod(verbose=True)
 
   """
-  $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst 
+  $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst
   0	1	M	<epsilon>
   0	2	m	man
   0
@@ -2562,7 +2581,7 @@ def test_get_op_attrib_keys():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "BatchMatMul")
+  assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
   assert_equal(x.get_shape().as_list(), [3, 4, 7])
   attrib_keys = get_op_attrib_keys(x)
   print("matmul attrib keys:", attrib_keys)
@@ -2576,7 +2595,7 @@ def test_get_op_input_names_MatMul():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "BatchMatMul")
+  assert_in(x.op.type, ['BatchMatMul', 'BatchMatMulV2'])
   input_names = get_op_input_names(x.op)
   print("matmul input names:", input_names)
   assert_equal(sorted(input_names), ['x', 'y'])
@@ -3328,6 +3347,10 @@ def test_get_linear_alignment_out_to_in_indices():
     session.run(
       get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)).tolist(),
     [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]])
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[3])).tolist(),
+    [[0, 1, 1]])
+
 
 
 def test_get_rnnt_linear_aligned_output():
@@ -3365,6 +3388,19 @@ def test_get_rnnt_linear_aligned_output():
      [4, 1, 4, 2, 4, 0, 0],
      [4, 4, 0, 0, 0, 0, 0],
      [1, 2, 3, 0, 0, 0, 0]])
+  # RNA test
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[7], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[4, 1, 4, 2, 4, 3, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[3], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[1, 2, 3]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[2], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[1, 2]])
 
 
 if __name__ == "__main__":

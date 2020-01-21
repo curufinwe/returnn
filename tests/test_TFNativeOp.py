@@ -31,6 +31,7 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 
 from TFNativeOp import *
+import TFUtil
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
 from Util import unicode
@@ -99,6 +100,10 @@ def dump_info():
   print("TF describe version:", Util.describe_tensorflow_version())
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
+  if TFUtil.have_min_tf_version((1, 14)):
+    print("TF link flags:", tf.sysconfig.get_link_flags())
+    print("TF compile flags:", tf.sysconfig.get_compile_flags())
+  print("TF cxx11 abi flag:", getattr(tf, 'CXX11_ABI_FLAG', "<undefined>"))
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
   tf_pywrap_so = tf.sysconfig.get_lib() + "/python/_pywrap_tensorflow_internal.so"
   sys_exec("ls", "-la", tf.sysconfig.get_lib())
@@ -112,6 +117,14 @@ def dump_info():
     debug_lib_so(tf_pywrap_so, ["_ZTIN10tensorflow8OpKernelE"])
   else:
     print("TF pywrap so does not(!) exist:", tf_pywrap_so)
+  print("TF compiler version:", getattr(tf, "__compiler_version__", None))
+  print("GCC for TF:", TFUtil.get_tf_gcc_path())
+  print("Available GCC versions:")
+  for p in os.environ["PATH"].split(":"):
+    if os.path.isdir(p):
+      for name in os.listdir(p):
+        if name.startswith("gcc"):
+          print("  %s/%s" % (p, name))
   # See OpCodeCompiler. Is already not used anymore but still maybe relevant.
   if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
     print("have (set|get)dlopenflags")
@@ -166,7 +179,7 @@ finally:
   sys.stdout = orig_stdout
 
 
-def test_native2lstm_compile():
+def test_NativeLstm2_compile():
   op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
   print("op:", op)
   maker = op._op_maker
@@ -184,7 +197,7 @@ def test_native2lstm_compile():
 try:
   sys.stdout = sys.__stdout__
   print("travis_fold:start:script.nativelstm2compile")
-  test_native2lstm_compile()
+  test_NativeLstm2_compile()
 except Exception as exc:
   print("NativeLstm2 compile exception:", exc)
 finally:
@@ -375,6 +388,67 @@ def test_NativeLstm2_run():
       session.run(tf.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
+
+
+def test_NativeLstm2_shape_inference_normal():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_normal"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+    index = tf.ones([n_time, n_batch])
+    n_batch_ = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch_, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch_, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [n_time, n_batch, n_hidden])
+
+
+def test_NativeLstm2_shape_inference_unknown_batchnlen():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_time = None
+  n_batch = None
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
+    index = tf.placeholder(tf.float32, [n_time, n_batch], name="index")
+    n_batch = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [None, None, n_hidden])
+
+
+def test_NativeLstm2_shape_inference_unknown_rank():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.placeholder(tf.float32, name="inputs")
+    index = tf.reduce_sum(inputs, axis=2)
+    n_batch = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [None, None, n_hidden])
 
 
 def test_NativeLstm2_0len_run():
@@ -1656,12 +1730,13 @@ def _log_softmax(x, axis=-1):
   return lsm
 
 
-def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
+def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, label_loop=True):
   """
   :param numpy.ndarray targets:
   :param numpy.ndarray target_seq_lens:
   :param int n_classes:
   :param bool with_native_fsa:
+  :param bool label_loop: ctc_merge_repeated in tf.nn.ctc_loss
   :return: nothing, just checks
   """
   n_batch, n_target_time = targets.shape
@@ -1681,17 +1756,27 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   float_idx = int_idx.astype("float32")
   blank_idx = n_classes - 1
 
-  import Fsa
-  fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
-  assert fsa.start_end_states.shape == (2, len(target_seq_lens))
-  edges = fsa.edges.astype("int32")
-  weights = fsa.weights.astype("float32")
-  start_end_states = fsa.start_end_states.astype("int32")
-  if with_native_fsa:
-    print("python edges:")
-    print(edges)
-    print("python start_end_states:")
-    print(start_end_states)
+  targets_tf = tf.constant(targets)
+  targets_seq_lens_tf = tf.constant(target_seq_lens)
+
+  if label_loop:
+    import Fsa
+    fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+    assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+    edges = fsa.edges.astype("int32")
+    weights = fsa.weights.astype("float32")
+    start_end_states = fsa.start_end_states.astype("int32")
+    if with_native_fsa:
+      print("python edges:")
+      print(edges)
+      print("python start_end_states:")
+      print(start_end_states)
+  else:
+    import TFNativeOp
+    native_edges_tf, native_weights_tf, native_start_end_states_tf = TFNativeOp.get_ctc_fsa_fast_bw(
+      targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx, label_loop=label_loop)
+    edges, weights, start_end_states = session.run(
+      (native_edges_tf, native_weights_tf, native_start_end_states_tf))
 
   fwdbwd, obs_scores = _py_baum_welch(
     am_scores=-_log_softmax(am_scores), float_idx=float_idx,
@@ -1699,9 +1784,6 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
   print(fwdbwd)
   print(obs_scores)
-
-  targets_tf = tf.constant(targets)
-  targets_seq_lens_tf = tf.constant(target_seq_lens)
 
   if with_native_fsa:
     import TFNativeOp
@@ -1738,7 +1820,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
   ref_ctc_loss_tf = tf.nn.ctc_loss(
     labels=targets_sparse_tf,
-    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True)
+    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True, ctc_merge_repeated=label_loop)
   # See grad definition of CTCLoss.
   # The op will calculate the gradient w.r.t. the logits (log softmax).
   # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
@@ -1819,6 +1901,21 @@ def test_ctc_fsa_batch4_len6_c8_native():
   target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
   n_classes = 8  # +1 because of blank
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch4_len6_c8_native_no_loop():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  No label loop (ctc_merge_repeated False) is equivalent to the Recurrent Neural Aligner (RNA) topology.
+  """
+  targets = numpy.array([
+    [1, 2, 4, 4, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [3, 3, 0, 0, 0, 0],
+    [5, 0, 0, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, label_loop=False)
 
 
 def test_ctc_fsa_batch2_len2a():
