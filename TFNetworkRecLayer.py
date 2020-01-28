@@ -3763,7 +3763,7 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def get_rec_initial_state_inner(cls, initial_shape, name, state_key='state', key=None, initial_state=None,
-                                  shape_invariant=None, rec_layer=None):
+                                  shape_invariant=None, rec_layer=None, dtype=tf.float32):
     """
     Generate initial hidden state. Primarily used as a inner function for RnnCellLayer.get_rec_initial_state.
 
@@ -3775,6 +3775,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
     :param tuple shape_invariant: If provided, directly used. Otherwise, guessed from initial_shape (see code below).
     :param RecLayer|LayerBase|None rec_layer: For the scope.
+    :param tf.DType: datatype of the returned state
     :rtype: tf.Tensor
     """
     key_name = str(key if key is not None else "var")
@@ -3791,14 +3792,15 @@ class RnnCellLayer(_ConcatInputLayer):
       assert initial_state.output.shape == initial_shape[1:]
       return initial_state.output.placeholder
     elif initial_state == "zeros" or not initial_state:
-      return tf.zeros(initial_shape)
+      return tf.zeros(initial_shape, dtype=dtype)
     elif initial_state == "ones" or initial_state == 1:
-      return tf.ones(initial_shape)
+      return tf.ones(initial_shape, dtype=dtype)
     elif initial_state == "var":  # Initial state is a trainable variable.
       # Assume the first dimension to be batch_dim.
       assert shape_invariant[0] is None and all([d is not None for d in shape_invariant[1:]])
       with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
-        var = tf.get_variable("initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer())
+        var = tf.get_variable(
+          "initial_%s" % key_name, dtype=dtype, shape=initial_shape[1:], initializer=tf.zeros_initializer(dtype=dtype))
       from TFUtil import expand_dims_unbroadcast
       var = expand_dims_unbroadcast(var, axis=0, dim=initial_shape[0])  # (batch,dim)
       return var
@@ -3809,7 +3811,8 @@ class RnnCellLayer(_ConcatInputLayer):
       with rec_layer.var_creation_scope():
         var = tf.get_variable(
           'keep_state_%s' % key_name,
-          validate_shape=False, initializer=tf.zeros(()),  # Dummy state, will not be used like this.
+          dtype=dtype,
+          validate_shape=False, initializer=tf.zeros((), dtype=dtype),  # Dummy state, will not be used like this.
           trainable=False, collections=[tf.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
       assert isinstance(var, tf.Variable)
       var.set_shape(shape_invariant)
@@ -3838,7 +3841,7 @@ class RnnCellLayer(_ConcatInputLayer):
         step = rec_layer.network.get_epoch_step()
         # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
         # likely `update_var` was not correctly called or handled.
-        s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(initial_shape), lambda: var.value())
+        s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(initial_shape, dtype=dtype), lambda: var.value())
         s.set_shape(shape_invariant)
         return s
     else:
